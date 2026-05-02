@@ -1443,7 +1443,7 @@ bool usb_hid_init(void)
 
 bool usb_host_enable_power(void)
 {
-    #ifdef PIN_USB_5V
+    #if defined(PIN_USB_5V) && (PIN_USB_5V != 255)
     gpio_put(PIN_USB_5V, 1); // Enable USB power
     #endif
     sleep_ms(100);           // Allow power to stabilize

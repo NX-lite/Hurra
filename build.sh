@@ -23,8 +23,10 @@ usage() {
     echo ""
     echo "Targets:"
     echo "  metro     Build main KMBox for Adafruit Metro RP2350 (primary)"
+    echo "  waveshare Build main KMBox for Waveshare RP2350-USB-A"
     echo "  pico2     Build main KMBox for RP2350 (Pico 2)"
     echo "  bridge    Build UART bridge for Metro RP2350 + ILI9341 (default)"
+    echo "  bridge-waveshare Build UART bridge for Waveshare RP2350-USB-A (minimal)"
     echo "  bridge-feather  Build UART bridge for Feather RP2350 + ST7735"
     echo "  both      Build main KMBox for Metro RP2350 and Pico 2"
     echo "  all       Build and flash KMBox + Bridge (Metro RP2350, interactive)"
@@ -40,7 +42,9 @@ usage() {
     echo "Examples:"
     echo "  $0                   # Build & flash both Metros (default)"
     echo "  $0 metro             # Build KMBox for Metro RP2350"
+    echo "  $0 waveshare         # Build KMBox for Waveshare RP2350-USB-A"
     echo "  $0 metro flash       # Build and flash for Metro RP2350"
+    echo "  $0 waveshare flash   # Build and flash for Waveshare RP2350-USB-A"
     echo "  $0 pico2 flash       # Build and flash for RP2350 (Pico 2)"
     echo "  $0 bridge            # Build UART bridge for Metro RP2350 + ILI9341"
     echo "  $0 all               # Build & flash KMBox + Bridge (Metro, guided)"
@@ -60,6 +64,10 @@ build_kmbox() {
             ;;
         metro)
             board="adafruit_metro_rp2350"
+            platform="rp2350-arm-s"
+            ;;
+        waveshare)
+            board="waveshare_rp2350_usb_a"
             platform="rp2350-arm-s"
             ;;
         *)
@@ -112,6 +120,10 @@ build_bridge() {
         metro)
             build_dir="$SCRIPT_DIR/bridge/build-metro"
             board="adafruit_metro_rp2350"
+            ;;
+        waveshare)
+            build_dir="$SCRIPT_DIR/bridge/build-waveshare"
+            board="waveshare_rp2350_usb_a"
             ;;
         *)
             echo -e "${RED}Unknown bridge target: $target${NC}"
@@ -215,7 +227,7 @@ FLASH=0
 
 for arg in "$@"; do
     case $arg in
-        pico2|metro|bridge|bridge-metro|bridge-feather|both|all|dual-metro|flash-metros|white-label|white-label-verify)
+        pico2|metro|waveshare|bridge|bridge-metro|bridge-waveshare|bridge-feather|both|all|dual-metro|flash-metros|white-label|white-label-verify)
             TARGET="$arg"
             ;;
         clean)
@@ -265,6 +277,13 @@ case $TARGET in
             flash_firmware "$SCRIPT_DIR/build-metro/PIOKMbox.uf2" "KMBox (Metro RP2350)"
         fi
         ;;
+    waveshare)
+        build_kmbox waveshare
+        if [ "$FLASH" = "1" ]; then
+            wait_for_device "KMBox (Waveshare RP2350-USB-A)"
+            flash_firmware "$SCRIPT_DIR/build-waveshare/PIOKMbox.uf2" "KMBox (Waveshare RP2350-USB-A)"
+        fi
+        ;;
     bridge)
         build_bridge metro
         if [ "$FLASH" = "1" ]; then
@@ -278,6 +297,13 @@ case $TARGET in
         if [ "$FLASH" = "1" ]; then
             wait_for_device "UART Bridge (Metro RP2350)"
             flash_firmware "$SCRIPT_DIR/bridge/build-metro/kmbox_bridge.uf2" "UART Bridge (Metro)"
+        fi
+        ;;
+    bridge-waveshare)
+        build_bridge waveshare
+        if [ "$FLASH" = "1" ]; then
+            wait_for_device "UART Bridge (Waveshare RP2350-USB-A)"
+            flash_firmware "$SCRIPT_DIR/bridge/build-waveshare/kmbox_bridge.uf2" "UART Bridge (Waveshare)"
         fi
         ;;
     bridge-feather)
@@ -453,5 +479,9 @@ echo ""
 echo "Firmware locations:"
 [ -f "$SCRIPT_DIR/build-pico2/PIOKMbox.uf2" ] && echo "  KMBox (Pico 2):            build-pico2/PIOKMbox.uf2"
 [ -f "$SCRIPT_DIR/build-metro/PIOKMbox.uf2" ] && echo "  KMBox (Metro RP2350):      build-metro/PIOKMbox.uf2"
+[ -f "$SCRIPT_DIR/build-waveshare/PIOKMbox.uf2" ] && echo "  KMBox (Waveshare USB-A):   build-waveshare/PIOKMbox.uf2"
 [ -f "$SCRIPT_DIR/bridge/build/kmbox_bridge.uf2" ] && echo "  Bridge (Feather):          bridge/build/kmbox_bridge.uf2"
 [ -f "$SCRIPT_DIR/bridge/build-metro/kmbox_bridge.uf2" ] && echo "  Bridge (Metro RP2350):     bridge/build-metro/kmbox_bridge.uf2"
+[ -f "$SCRIPT_DIR/bridge/build-waveshare/kmbox_bridge.uf2" ] && echo "  Bridge (Waveshare USB-A):  bridge/build-waveshare/kmbox_bridge.uf2"
+
+exit 0

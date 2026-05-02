@@ -40,6 +40,7 @@
 // Pin definitions - set via CMake compile definitions based on board type
 // Override these via CMakeLists.txt for different boards:
 //   - Adafruit Metro RP2350:   D+=32, D-=33, 5V=29, LED=23, NeoPixel=25
+//   - Waveshare RP2350-USB-A:  D+=12, D-=13, 5V always on, NeoPixel=16
 //   - Adafruit Feather RP2040: D+=16, D-=17, 5V=18, LED=13, NeoPixel=21
 //   - Pico/Pico2 default:      D+=16, D-=17, 5V=18, LED=25, NeoPixel=21
 
