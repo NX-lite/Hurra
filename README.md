@@ -9,7 +9,7 @@
 [![License](https://img.shields.io/badge/license-open--source-green)](#license)
 [![Protocol](https://img.shields.io/badge/protocol-KMBox%20B%2B%20%7C%20Ferrum%20%7C%20Macku-orange)](#kmbox-compatibility)
 
-A high-performance dual-role USB HID firmware that creates a **transparent USB passthrough device** while providing **KMBox-compatible serial control** for mouse and keyboard automation with advanced humanization and optional visual feedback via ILI9341 display.
+A high-performance RP2350 USB HID firmware that supports both **Adafruit Metro RP2350** and **Waveshare RP2350 USB-A** hardware. It creates a **transparent USB passthrough device** while providing **KMBox-compatible serial control** for mouse and keyboard automation with advanced humanization and optional visual feedback via ILI9341 display.
 
 ```
 Mouse/Keyboard ──► [RP2350 Board 1] ──► PC
@@ -79,6 +79,8 @@ PIOKMbox turns an RP2350 board into a transparent man-in-the-middle USB HID devi
 
 **Dual Adafruit Metro RP2350 + ILI9341 Display**
 
+> This firmware also supports the Waveshare RP2350 USB-A board. Use `./build.sh waveshare` for the main KMBox target and `./build.sh bridge-waveshare` for the Waveshare bridge target.
+
 #### Board 1: USB Proxy (Main KMBox)
 
 | Item      | Detail                                        |
@@ -132,25 +134,29 @@ Board 1 (Proxy)           Board 2 (Bridge)
 ### 1. Clone and Build
 
 ```bash
-git clone --recursive https://github.com/ramseymcgrath/RaspberryKMBox.git
-cd RaspberryKMBox
+git clone --recursive https://github.com/NX-lite/Hurra.git
+cd Hurra
 
 # If you already cloned without --recursive:
 git submodule update --init --recursive
 
 # Build options:
-./build.sh metro          # Main KMBox for Metro RP2350
-./build.sh bridge-metro   # Bridge for Metro RP2350 with display
-./build.sh dual-metro     # Build both targets
-./build.sh all            # Build all configurations
+./build.sh pico2            # RP2350 (Pico 2)
+./build.sh metro            # Main KMBox for Metro RP2350
+./build.sh waveshare        # Main KMBox for Waveshare RP2350 USB-A
+./build.sh bridge           # Bridge for XIAO/Feather RP2350
+./build.sh bridge-metro     # Bridge for Metro RP2350
+./build.sh bridge-waveshare # Bridge for Waveshare RP2350 USB-A
+./build.sh dual-metro       # Build both main and bridge for Metro
+./build.sh all              # Build all configurations
 ```
 
 ### 2. Flash Firmware
 
 | Board                   | Steps                                                                                                                      |
 |:------------------------|:---------------------------------------------------------------------------------------------------------------------------|
-| **Board 1** (USB Proxy) | Hold **BOOTSEL** while connecting USB-C to PC. Drag `build-metro/PIOKMbox.uf2` to the mounted **RP2350** drive.            |
-| **Board 2** (Bridge)    | Hold **BOOTSEL** while connecting USB-C to PC. Drag `bridge/build-metro/kmbox_bridge.uf2` to the mounted **RP2350** drive. |
+| **Board 1** (USB Proxy) | Hold **BOOTSEL** while connecting USB-C to PC. Drag `build-metro/PIOKMbox.uf2` or `build-waveshare/PIOKMbox.uf2` to the mounted **RP2350** drive.            |
+| **Board 2** (Bridge)    | Hold **BOOTSEL** while connecting USB-C to PC. Drag `bridge/build-metro/kmbox_bridge.uf2` or `bridge/build-waveshare/kmbox_bridge.uf2` to the mounted **RP2350** drive. |
 
 Both boards reboot automatically after flashing.
 
@@ -423,7 +429,7 @@ An optional companion firmware for a second **Adafruit Metro RP2350** with an IL
 ### Project Layout
 
 ```
-RaspberryKMBox/
+Hurra/
 ├── PIOKMbox.c                # Main firmware — core orchestration
 ├── usb_hid.*                 # HID device/host, VID/PID mirroring
 ├── kmbox_serial_handler.*    # KMBox UART command integration
@@ -653,8 +659,8 @@ Main project files follow standard open-source practices. Libraries under `lib/`
 
 | Channel       | Link                                                                              |
 |:--------------|:----------------------------------------------------------------------------------|
-| Bug Reports   | [GitHub Issues](https://github.com/ramseymcgrath/RaspberryKMBox/issues)           |
-| Discussions   | [GitHub Discussions](https://github.com/ramseymcgrath/RaspberryKMBox/discussions) |
+| Bug Reports   | [GitHub Issues](https://github.com/NX-lite/Hurra/issues)           |
+| Discussions   | [GitHub Discussions](https://github.com/NX-lite/Hurra/discussions) |
 | Documentation | See individual `.md` files for detailed topics                                    |
 
 ---
