@@ -392,7 +392,7 @@ static void main_application_loop(void) {
 int main(void) {
     
     // Initialize basic GPIO (clock will be set by initialize_system)
-    #ifdef PIN_USB_5V
+    #if defined(PIN_USB_5V) && (PIN_USB_5V != 255)
     gpio_init(PIN_USB_5V);
     gpio_set_dir(PIN_USB_5V, GPIO_OUT);
     gpio_put(PIN_USB_5V, 0);  // Keep USB power OFF initially

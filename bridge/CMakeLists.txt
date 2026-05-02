@@ -43,6 +43,13 @@ if(PICO_BOARD STREQUAL "adafruit_feather_rp2350")
     set(ENABLE_COLOR_TRACKER 0)
     set(ENABLE_MAKCU_PROTOCOL 0)
     message(STATUS "Bridge: Feather RP2350 — minimal latency (Wire Protocol v2)")
+elseif(PICO_BOARD STREQUAL "waveshare_rp2350_usb_a")
+    # Waveshare RP2350-USB-A: minimal bridge, no TFT/tracker/Makcu
+    set(BRIDGE_IS_FEATHER TRUE)
+    set(ENABLE_TFT_DISPLAY 0)
+    set(ENABLE_COLOR_TRACKER 0)
+    set(ENABLE_MAKCU_PROTOCOL 0)
+    message(STATUS "Bridge: Waveshare RP2350-USB-A — minimal latency (Wire Protocol v2)")
 elseif(PICO_BOARD STREQUAL "adafruit_metro_rp2350")
     # Metro: full build with TFT + tracker + Makcu
     set(BRIDGE_IS_FEATHER FALSE)
@@ -186,7 +193,13 @@ target_compile_definitions(kmbox_bridge PRIVATE
     ENABLE_MAKCU_PROTOCOL=${ENABLE_MAKCU_PROTOCOL}
 )
 
-if(BRIDGE_IS_FEATHER)
+if(PICO_BOARD STREQUAL "waveshare_rp2350_usb_a")
+    target_compile_definitions(kmbox_bridge PRIVATE
+        USBD_MANUFACTURER="Hurricane"
+        USBD_PRODUCT="KMBox\ Waveshare\ Bridge"
+        USBD_DESC_STR_MAX=32
+    )
+elseif(BRIDGE_IS_FEATHER)
     target_compile_definitions(kmbox_bridge PRIVATE
         USBD_MANUFACTURER="Hurricane"
         USBD_PRODUCT="KMBox\ Feather\ Bridge"
@@ -228,7 +241,10 @@ pico_enable_stdio_uart(kmbox_bridge 0)
 pico_add_extra_outputs(kmbox_bridge)
 
 # Binary info
-if(BRIDGE_IS_FEATHER)
+if(PICO_BOARD STREQUAL "waveshare_rp2350_usb_a")
+    pico_set_program_name(kmbox_bridge "KMBox Waveshare Bridge")
+    pico_set_program_description(kmbox_bridge "Minimal latency bridge for Waveshare RP2350-USB-A")
+elseif(BRIDGE_IS_FEATHER)
     pico_set_program_name(kmbox_bridge "KMBox Feather Bridge")
     pico_set_program_description(kmbox_bridge "Minimal latency bridge with Wire Protocol v2")
 else()
