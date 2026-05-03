@@ -9,6 +9,8 @@
 #include "pico/stdlib.h"
 #include "pico/platform.h"
 #include "hardware/timer.h"     // For time_us_32() in hid_device_task
+#include "hardware/address_mapped.h"
+#include "hardware/structs/usb.h"
 #include "kmbox_serial_handler.h" // Include the header for serial handling
 #include "state_management.h"   // Include the header for state management
 #include "watchdog.h"           // Include the header for watchdog management
@@ -32,8 +34,13 @@ static bool checked_runtime_mouse_override = false;
 #define HID_STATUS_POLL_INTERVAL_MS 100u
 #define HID_STATUS_MISSING_DEBOUNCE_MS 250u
 
+#define usb_hw_set    ((usb_hw_t *)hw_set_alias_untyped(usb_hw))
+#define usb_hw_clear  ((usb_hw_t *)hw_clear_alias_untyped(usb_hw))
+
 static inline void request_device_reenumeration(void);
 static inline void request_device_disconnect(void);
+static void downstream_usb_disconnect(void);
+static void downstream_usb_connect(void);
 
 // Dynamic string descriptor storage
 static char attached_manufacturer[64] = "";
@@ -123,8 +130,7 @@ void set_attached_device_vid_pid(uint16_t vid, uint16_t pid) {
 
 void force_usb_reenumeration() {
     // Disconnect from USB host
-    tud_disconnect();
-    downstream_device_connected = false;
+    downstream_usb_disconnect();
     
     // Wait for host to recognize disconnection (500ms for Windows/macOS)
     // Feed watchdog during long wait to prevent reset
@@ -138,8 +144,7 @@ void force_usb_reenumeration() {
     }
     
     // Reconnect with new descriptor
-    tud_connect();
-    downstream_device_connected = true;
+    downstream_usb_connect();
     
     // Wait for reconnection (250ms for stability)
     // Feed watchdog during wait
@@ -157,6 +162,20 @@ static inline void request_device_reenumeration(void) {
 static inline void request_device_disconnect(void) {
     __dmb();
     pending_device_disconnect = true;
+}
+
+static void downstream_usb_disconnect(void)
+{
+    tud_disconnect();
+    usb_hw_clear->sie_ctrl = USB_SIE_CTRL_PULLUP_EN_BITS;
+    downstream_device_connected = false;
+}
+
+static void downstream_usb_connect(void)
+{
+    tud_connect();
+    usb_hw_set->sie_ctrl = USB_SIE_CTRL_PULLUP_EN_BITS;
+    downstream_device_connected = true;
 }
 
 //--------------------------------------------------------------------+
@@ -1981,8 +2000,7 @@ void hid_device_task(void)
         pending_device_reenumeration = false;
         __dmb();
         if (downstream_device_connected || tud_mounted()) {
-            tud_disconnect();
-            downstream_device_connected = false;
+            downstream_usb_disconnect();
         }
         return;
     }
@@ -2003,8 +2021,7 @@ void hid_device_task(void)
         pending_device_disconnect = false;
         __dmb();
         if (downstream_device_connected || tud_mounted()) {
-            tud_disconnect();
-            downstream_device_connected = false;
+            downstream_usb_disconnect();
         }
         return;
     }
