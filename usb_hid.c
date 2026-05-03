@@ -24,7 +24,16 @@ uint16_t attached_vid = 0;
 uint16_t attached_pid = 0;
 bool attached_has_serial = false;
 static volatile bool pending_device_reenumeration = false;
+static volatile bool pending_device_disconnect = false;
+static volatile bool downstream_device_connected = true;
+static volatile bool host_hid_ready = false;
 static bool checked_runtime_mouse_override = false;
+
+#define HID_STATUS_POLL_INTERVAL_MS 100u
+#define HID_STATUS_MISSING_DEBOUNCE_MS 250u
+
+static inline void request_device_reenumeration(void);
+static inline void request_device_disconnect(void);
 
 // Dynamic string descriptor storage
 static char attached_manufacturer[64] = "";
@@ -104,15 +113,18 @@ void set_attached_device_vid_pid(uint16_t vid, uint16_t pid) {
         attached_vid = vid;
         attached_pid = pid;
         attached_has_serial = false; // Default to no serial number unless device has one
+        host_hid_ready = (vid != 0 && pid != 0);
         
-        // Force USB re-enumeration to update descriptor
-        force_usb_reenumeration();
+        // Device stack calls must run on Core0. Host callbacks run on Core1,
+        // so schedule the downstream re-enumeration for hid_device_task().
+        request_device_reenumeration();
     }
 }
 
 void force_usb_reenumeration() {
     // Disconnect from USB host
     tud_disconnect();
+    downstream_device_connected = false;
     
     // Wait for host to recognize disconnection (500ms for Windows/macOS)
     // Feed watchdog during long wait to prevent reset
@@ -120,9 +132,14 @@ void force_usb_reenumeration() {
         sleep_ms(10);
         watchdog_core0_heartbeat();
     }
+
+    if (!host_hid_ready || attached_vid == 0 || attached_pid == 0) {
+        return;
+    }
     
     // Reconnect with new descriptor
     tud_connect();
+    downstream_device_connected = true;
     
     // Wait for reconnection (250ms for stability)
     // Feed watchdog during wait
@@ -137,6 +154,11 @@ static inline void request_device_reenumeration(void) {
     pending_device_reenumeration = true;
 }
 
+static inline void request_device_disconnect(void) {
+    __dmb();
+    pending_device_disconnect = true;
+}
+
 //--------------------------------------------------------------------+
 // USB Descriptor Cloning Infrastructure
 //--------------------------------------------------------------------+
@@ -146,6 +168,8 @@ static void build_runtime_hid_report_with_mouse(const uint8_t *mouse_desc, size_
 static void rebuild_configuration_descriptor(void);
 static void parse_host_config_descriptor(const uint8_t *cfg_desc, uint16_t cfg_len);
 static void reset_device_string_descriptors(void);  // Defined after all global state
+static void handle_hid_device_offline(uint8_t dev_addr);
+static void poll_hid_device_status(void);
 
 // Captured host device descriptor fields for cloning
 static struct {
@@ -699,6 +723,15 @@ static void reset_device_string_descriptors(void) {
     // Rebuild config descriptor with defaults
     build_runtime_hid_report_with_mouse(NULL, 0);
     rebuild_configuration_descriptor();
+}
+
+static void reset_passthrough_identity(void) {
+    attached_vid = 0;
+    attached_pid = 0;
+    host_hid_ready = false;
+    checked_runtime_mouse_override = false;
+    using_16bit_output_override = false;
+    reset_device_string_descriptors();
 }
 
 //--------------------------------------------------------------------+
@@ -1410,6 +1443,10 @@ bool usb_hid_init(void)
 
     // Initialize connection state
     memset(&connection_state, 0, sizeof(connection_state));
+    host_hid_ready = false;
+    downstream_device_connected = true;
+    pending_device_disconnect = true;
+    pending_device_reenumeration = false;
 
     // Initialize per-instance HID tracking
     memset(hid_instances, 0, sizeof(hid_instances));
@@ -1530,6 +1567,63 @@ static void handle_hid_device_connection(uint8_t dev_addr, uint8_t itf_protocol)
 
     // Update LED status instead of verbose console output
     neopixel_update_status();
+}
+
+static void handle_hid_device_offline(uint8_t dev_addr)
+{
+    free_hid_instances_for_device(dev_addr);
+    handle_device_disconnection(dev_addr);
+    reset_passthrough_identity();
+    request_device_disconnect();
+
+    neopixel_trigger_activity_flash_color(COLOR_USB_DISCONNECTION);
+    neopixel_update_status();
+    kmbox_send_status("HID device disconnected");
+}
+
+static void poll_hid_device_status(void)
+{
+    static uint32_t last_status_poll_ms = 0;
+    static uint32_t hid_missing_since_ms = 0;
+
+    uint8_t dev_addr = cloned_dev_addr;
+    if (dev_addr == 0) {
+        dev_addr = connection_state.mouse_dev_addr ? connection_state.mouse_dev_addr
+                                                   : connection_state.keyboard_dev_addr;
+    }
+    if (dev_addr == 0) {
+        hid_missing_since_ms = 0;
+        return;
+    }
+
+    uint32_t now = to_ms_since_boot(get_absolute_time());
+    if ((now - last_status_poll_ms) < HID_STATUS_POLL_INTERVAL_MS) {
+        return;
+    }
+    last_status_poll_ms = now;
+
+    bool missing = !tuh_mounted(dev_addr);
+    for (uint8_t i = 0; i < mirrored_itf_count && !missing; i++) {
+        if (mirrored_itfs[i].active &&
+            !tuh_hid_mounted(mirrored_itfs[i].host_dev_addr, mirrored_itfs[i].host_instance)) {
+            dev_addr = mirrored_itfs[i].host_dev_addr;
+            missing = true;
+        }
+    }
+
+    if (!missing) {
+        hid_missing_since_ms = 0;
+        return;
+    }
+
+    if (hid_missing_since_ms == 0) {
+        hid_missing_since_ms = now;
+        return;
+    }
+
+    if ((now - hid_missing_since_ms) >= HID_STATUS_MISSING_DEBOUNCE_MS) {
+        handle_hid_device_offline(dev_addr);
+    }
 }
 
 static bool __not_in_flash_func(process_keyboard_report_internal)(const hid_keyboard_report_t *report)
@@ -1882,10 +1976,40 @@ void hid_device_task(void)
     // Xbox mode: skip HID device task entirely, xbox_device_task handles it
     if (g_xbox_mode) return;
 
-    if (pending_device_reenumeration) {
+    if (pending_device_disconnect && !host_hid_ready) {
+        pending_device_disconnect = false;
         pending_device_reenumeration = false;
         __dmb();
-        force_usb_reenumeration();
+        if (downstream_device_connected || tud_mounted()) {
+            tud_disconnect();
+            downstream_device_connected = false;
+        }
+        return;
+    }
+
+    if (pending_device_reenumeration) {
+        pending_device_reenumeration = false;
+        pending_device_disconnect = false;
+        __dmb();
+        if (host_hid_ready) {
+            force_usb_reenumeration();
+        } else {
+            request_device_disconnect();
+        }
+        return;
+    }
+
+    if (pending_device_disconnect) {
+        pending_device_disconnect = false;
+        __dmb();
+        if (downstream_device_connected || tud_mounted()) {
+            tud_disconnect();
+            downstream_device_connected = false;
+        }
+        return;
+    }
+
+    if (!host_hid_ready || !downstream_device_connected) {
         return;
     }
 
@@ -2202,15 +2326,21 @@ void send_hid_report(uint8_t report_id)
 
 void hid_host_task(void)
 {
+    poll_hid_device_status();
+
     // Drain SET_REPORT passthrough queue (Core0 → Core1).
     // Forward vendor SET_REPORT requests from the downstream PC to the real mouse.
     // Process at most 1 per call — tuh_hid_set_report() may block on USB
     // control transfer, and draining the full queue could stall Core1's PIO USB.
     if (set_report_queue.tail != set_report_queue.head) {
         set_report_entry_t *e = &set_report_queue.entries[set_report_queue.tail];
-        tuh_hid_set_report(e->host_dev_addr, e->host_instance,
-                           e->report_id, e->report_type,
-                           (void*)e->data, e->len);
+        if (tuh_hid_mounted(e->host_dev_addr, e->host_instance)) {
+            tuh_hid_set_report(e->host_dev_addr, e->host_instance,
+                               e->report_id, e->report_type,
+                               (void*)e->data, e->len);
+        } else {
+            handle_hid_device_offline(e->host_dev_addr);
+        }
         __dmb();
         set_report_queue.tail = (set_report_queue.tail + 1) & VENDOR_QUEUE_MASK;
     }
@@ -2222,12 +2352,17 @@ void hid_host_task(void)
         get_report_bridge.busy = true;
         __dmb();
 
-        bool started = tuh_hid_get_report(get_report_bridge.host_dev_addr,
-                                          get_report_bridge.host_instance,
-                                          get_report_bridge.report_id,
-                                          get_report_bridge.report_type,
-                                          get_report_bridge.data,
-                                          get_report_bridge.request_len);
+        bool started = false;
+        if (tuh_hid_mounted(get_report_bridge.host_dev_addr, get_report_bridge.host_instance)) {
+            started = tuh_hid_get_report(get_report_bridge.host_dev_addr,
+                                         get_report_bridge.host_instance,
+                                         get_report_bridge.report_id,
+                                         get_report_bridge.report_type,
+                                         get_report_bridge.data,
+                                         get_report_bridge.request_len);
+        } else {
+            handle_hid_device_offline(get_report_bridge.host_dev_addr);
+        }
         if (!started) {
             get_report_bridge.busy = false;
             get_report_bridge.done = true;
@@ -2276,8 +2411,13 @@ void tuh_mount_cb(uint8_t dev_addr)
 void tuh_umount_cb(uint8_t dev_addr)
 {
 
-    // Handle device disconnection
-    handle_device_disconnection(dev_addr);
+    if (dev_addr == cloned_dev_addr ||
+        dev_addr == connection_state.mouse_dev_addr ||
+        dev_addr == connection_state.keyboard_dev_addr) {
+        handle_hid_device_offline(dev_addr);
+    } else {
+        handle_device_disconnection(dev_addr);
+    }
 
     static uint32_t last_unmount_time = 0;
     uint32_t current_time = to_ms_since_boot(get_absolute_time());
@@ -2504,18 +2644,7 @@ void tuh_hid_umount_cb(uint8_t dev_addr, uint8_t instance)
 {
     (void)instance;
 
-    // Free per-instance tracking for this device
-    free_hid_instances_for_device(dev_addr);
-
-    // Reset string descriptors when device is disconnected
-    reset_device_string_descriptors();
-
-    // Handle device disconnection
-    handle_device_disconnection(dev_addr);
-
-    // Trigger visual feedback
-    neopixel_trigger_activity_flash_color(COLOR_USB_DISCONNECTION);
-    neopixel_update_status();
+    handle_hid_device_offline(dev_addr);
 }
 
 // Helper: parse a mouse report from raw bytes, handling variable report sizes.
@@ -2680,7 +2809,11 @@ void __not_in_flash_func(tuh_hid_report_received_cb)(uint8_t dev_addr, uint8_t i
 {
     if (report == NULL || len == 0)
     {
-        tuh_hid_receive_report(dev_addr, instance);
+        if (tuh_hid_mounted(dev_addr, instance)) {
+            tuh_hid_receive_report(dev_addr, instance);
+        } else {
+            handle_hid_device_offline(dev_addr);
+        }
         return;
     }
 
@@ -2770,8 +2903,12 @@ void __not_in_flash_func(tuh_hid_report_received_cb)(uint8_t dev_addr, uint8_t i
         break;
     }
 
-    // Continue to request reports
-    tuh_hid_receive_report(dev_addr, instance);
+    // Continue to request reports while the interface is still mounted.
+    if (tuh_hid_mounted(dev_addr, instance)) {
+        tuh_hid_receive_report(dev_addr, instance);
+    } else {
+        handle_hid_device_offline(dev_addr);
+    }
 }
 
 void tuh_hid_get_report_complete_cb(uint8_t dev_addr, uint8_t instance, uint8_t report_id, uint8_t report_type, uint16_t len)
